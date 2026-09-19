@@ -1,13 +1,13 @@
 <AddIn name="Selective Build" author="Adrián Santarelli" description="Compila selectivamente apps de una solución multi-DLL Clarion vía ClarionCL">
   <Manifest>
-    <Identity name="SelectiveBuild" version="1.0.0"/>
+    <Identity name="SelectiveBuild" version="{VERSION}"/>
   </Manifest>
   <Runtime>
     <Import assembly="SelectiveBuild.dll"/>
   </Runtime>
 
   <Path name="/SharpDevelop/Workbench/Pads">
-    <Pad id="SelectiveBuild" category="Tools" title="Selective Build"
+    <Pad id="SelectiveBuild" category="Tools" title="Selective Build v{VERSION}"
          icon="PadIcons.ClassBrowser"
          class="SelectiveBuild.SelectiveBuildPad"/>
   </Path>

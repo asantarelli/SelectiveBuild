@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Xml;
 
 namespace SelectiveBuild.Services
 {
@@ -12,11 +13,22 @@ namespace SelectiveBuild.Services
         public string Guid { get; set; }
         public string CwprojPath { get; set; }
         public string AppPath { get; set; }
+        /// <summary>Position of the project in the .sln (declaration order), used as the IDE's tie-breaker.</summary>
+        public int SolutionIndex { get; set; }
+
+        /// <summary>GUIDs from the .sln's ProjectSection(ProjectDependencies) (what the Project Dependency Editor writes).</summary>
         public List<string> DependsOnGuids { get; set; }
+
+        /// <summary>GUIDs of solution projects referenced by &lt;ProjectReference&gt; items in the .cwproj.</summary>
+        public List<string> ReferencedGuids { get; set; }
+
+        /// <summary>True if the .cwproj has any &lt;ProjectReference&gt;, resolved or not (mirrors the IDE's HasReferences).</summary>
+        public bool HasProjectReferences { get; set; }
 
         public AppInfo()
         {
             DependsOnGuids = new List<string>();
+            ReferencedGuids = new List<string>();
         }
     }
 
@@ -99,7 +111,8 @@ namespace SelectiveBuild.Services
                             Name = name,
                             Guid = m.Groups["guid"].Value,
                             CwprojPath = cwprojPath,
-                            AppPath = ResolveAppFile(solutionDir, name)
+                            AppPath = ResolveAppFile(solutionDir, name),
+                            SolutionIndex = result.Count
                         };
                         result.Add(current);
                     }
@@ -137,59 +150,142 @@ namespace SelectiveBuild.Services
                 }
             }
 
+            ResolveProjectReferences(result);
+
             result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
             return result;
         }
 
         /// <summary>
-        /// Orders the selected apps so that every app builds after everything it depends on
-        /// (per the .sln's Project Dependencies), using a stable topological sort. Dependencies
-        /// that are not themselves selected are skipped (assumed already built / not requested).
+        /// Reads each app's .cwproj &lt;ProjectReference&gt; items and maps them to solution GUIDs,
+        /// by referenced path first and then by the reference's &lt;Project&gt; GUID.
+        /// </summary>
+        private void ResolveProjectReferences(List<AppInfo> apps)
+        {
+            var byPath = new Dictionary<string, AppInfo>(StringComparer.OrdinalIgnoreCase);
+            var byGuid = new Dictionary<string, AppInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var app in apps)
+            {
+                string full = SafeFullPath(app.CwprojPath);
+                if (full != null) byPath[full] = app;
+                if (!string.IsNullOrEmpty(app.Guid)) byGuid[app.Guid] = app;
+            }
+
+            foreach (var app in apps)
+            {
+                if (!File.Exists(app.CwprojPath)) continue;
+                XmlDocument doc = new XmlDocument();
+                try { doc.Load(app.CwprojPath); }
+                catch { continue; }
+
+                string projDir = Path.GetDirectoryName(app.CwprojPath);
+                foreach (XmlNode node in doc.GetElementsByTagName("ProjectReference"))
+                {
+                    var element = node as XmlElement;
+                    if (element == null) continue;
+                    app.HasProjectReferences = true;
+
+                    AppInfo target = null;
+                    string include = element.GetAttribute("Include");
+                    if (!string.IsNullOrEmpty(include))
+                    {
+                        string full = SafeFullPath(Path.Combine(projDir, include));
+                        if (full != null) byPath.TryGetValue(full, out target);
+                    }
+                    if (target == null)
+                    {
+                        foreach (XmlNode child in element.ChildNodes)
+                        {
+                            if (child.LocalName != "Project") continue;
+                            string guid = child.InnerText.Trim().Trim('{', '}');
+                            byGuid.TryGetValue(guid, out target);
+                            break;
+                        }
+                    }
+                    if (target != null) app.ReferencedGuids.Add(target.Guid);
+                }
+            }
+        }
+
+        private static string SafeFullPath(string path)
+        {
+            try { return Path.GetFullPath(path); }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Orders the selected apps exactly like Clarion's Project Dependency Editor
+        /// (SoftVelocity.Common.ProjectDependencyEditorHelper.Refresh/AddProject in CommonSources.dll):
+        /// first every app with no references/dependencies in .sln declaration order, then a
+        /// depth-first walk over all apps in declaration order that emits each app after its
+        /// .cwproj ProjectReferences and its .sln ProjectDependencies. The global order is then
+        /// filtered to the selected apps. Reordering in that dialog only rewrites the .sln's
+        /// ProjectDependencies, so this always matches what the dialog shows.
         /// </summary>
         public List<AppInfo> OrderByDependencies(List<AppInfo> allApps, List<AppInfo> selectedApps)
         {
+            var solutionOrder = new List<AppInfo>(allApps);
+            solutionOrder.Sort((a, b) => a.SolutionIndex.CompareTo(b.SolutionIndex));
+
             var byGuid = new Dictionary<string, AppInfo>(StringComparer.OrdinalIgnoreCase);
-            foreach (var app in allApps)
-                if (!string.IsNullOrEmpty(app.Guid)) byGuid[app.Guid] = app;
+            foreach (var app in solutionOrder)
+                if (!string.IsNullOrEmpty(app.Guid) && !byGuid.ContainsKey(app.Guid)) byGuid[app.Guid] = app;
 
-            var selectedGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var app in selectedApps)
-                if (!string.IsNullOrEmpty(app.Guid)) selectedGuids.Add(app.Guid);
+            var sorted = new List<AppInfo>();
+            var added = new HashSet<AppInfo>();
 
-            var ordered = new List<AppInfo>();
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var app in selectedApps)
+            foreach (var app in solutionOrder)
             {
-                Visit(app, byGuid, selectedGuids, visited, visiting, ordered);
-            }
-
-            return ordered;
-        }
-
-        private void Visit(AppInfo app, Dictionary<string, AppInfo> byGuid, HashSet<string> selectedGuids,
-            HashSet<string> visited, HashSet<string> visiting, List<AppInfo> ordered)
-        {
-            if (app == null || string.IsNullOrEmpty(app.Guid)) return;
-            if (visited.Contains(app.Guid)) return;
-            if (visiting.Contains(app.Guid)) return; // circular dependency in the .sln, skip re-entry
-
-            visiting.Add(app.Guid);
-
-            foreach (var depGuid in app.DependsOnGuids)
-            {
-                if (!selectedGuids.Contains(depGuid)) continue; // not selected, don't pull it in
-                AppInfo dep;
-                if (byGuid.TryGetValue(depGuid, out dep))
+                if (!app.HasProjectReferences && !HasSolutionDependencies(app, byGuid))
                 {
-                    Visit(dep, byGuid, selectedGuids, visited, visiting, ordered);
+                    sorted.Add(app);
+                    added.Add(app);
                 }
             }
 
-            visiting.Remove(app.Guid);
-            visited.Add(app.Guid);
-            ordered.Add(app);
+            foreach (var app in solutionOrder)
+            {
+                AddProject(app, byGuid, sorted, added, new List<AppInfo>());
+            }
+
+            var selected = new HashSet<AppInfo>(selectedApps);
+            var ordered = new List<AppInfo>();
+            foreach (var app in sorted)
+                if (selected.Contains(app)) ordered.Add(app);
+            return ordered;
+        }
+
+        private static bool HasSolutionDependencies(AppInfo app, Dictionary<string, AppInfo> byGuid)
+        {
+            foreach (var guid in app.DependsOnGuids)
+                if (byGuid.ContainsKey(guid)) return true;
+            return false;
+        }
+
+        private void AddProject(AppInfo app, Dictionary<string, AppInfo> byGuid, List<AppInfo> sorted,
+            HashSet<AppInfo> added, List<AppInfo> stack)
+        {
+            if (app == null || added.Contains(app)) return;
+
+            stack.Add(app);
+
+            foreach (var guid in app.ReferencedGuids)
+            {
+                AppInfo dep;
+                if (byGuid.TryGetValue(guid, out dep) && !stack.Contains(dep))
+                    AddProject(dep, byGuid, sorted, added, stack);
+            }
+
+            foreach (var guid in app.DependsOnGuids)
+            {
+                AppInfo dep;
+                if (byGuid.TryGetValue(guid, out dep) && !stack.Contains(dep))
+                    AddProject(dep, byGuid, sorted, added, stack);
+            }
+
+            stack.RemoveAt(stack.Count - 1);
+            sorted.Add(app);
+            added.Add(app);
         }
 
         private string ResolveAppFile(string solutionDir, string appName)

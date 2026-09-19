@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 
@@ -37,6 +38,15 @@ namespace SelectiveBuild.Services
                 return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
             }
 
+            // ClarionCL /ag needs exclusive access to the .app; if it's open (typically in the IDE), skip it
+            // with a clear message instead of letting ClarionCL fail with a less obvious one.
+            string lockError = CheckExclusiveAccess(app.AppPath);
+            if (lockError != null)
+            {
+                Log(sb, "ERROR: " + lockError + " Se omite " + app.Name + ".");
+                return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
+            }
+
             // Step 1: generate source from the .app
             ok = RunProcess(clarionCLPath, "/ag \"" + app.AppPath + "\" /au", Path.GetDirectoryName(app.AppPath), timeoutSeconds, sb);
             if (!ok)
@@ -52,10 +62,49 @@ namespace SelectiveBuild.Services
                 return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
             }
 
-            string msbuildArgs = "\"" + app.CwprojPath + "\" /p:Configuration=" + configuration + " /p:Platform=" + platform + " /nologo /v:minimal";
+            // NoDependency=true: build only this project, not its <ProjectReference>s. The IDE passes the
+            // same flag for "build project only"; SelectiveBuild already builds the selected apps in
+            // dependency order, so rebuilding references would just repeat work (and errors).
+            string msbuildArgs = "\"" + app.CwprojPath + "\" /p:Configuration=" + configuration + " /p:Platform=" + platform + " /p:NoDependency=true /nologo /v:minimal";
+
+            // .cwproj files import "$(ClarionBinPath)\SoftVelocity.Build.Clarion.targets". The IDE sets
+            // ClarionBinPath as a global property (the folder of its own executable, see CWBinding.dll),
+            // so a standalone MSBuild needs it passed explicitly. ClarionCL.exe lives in that same folder.
+            string clarionBinPath = Path.GetDirectoryName(Path.GetFullPath(clarionCLPath));
+            if (File.Exists(Path.Combine(clarionBinPath, "SoftVelocity.Build.Clarion.targets")))
+            {
+                msbuildArgs += " \"/p:ClarionBinPath=" + clarionBinPath.TrimEnd('\\') + "\"";
+            }
+            else
+            {
+                Log(sb, "ADVERTENCIA: no se encontró SoftVelocity.Build.Clarion.targets en " + clarionBinPath);
+            }
             ok = RunProcess(MsBuildPath, msbuildArgs, Path.GetDirectoryName(app.CwprojPath), timeoutSeconds, sb);
 
             return new BuildResult { AppName = app.Name, Success = ok, Output = sb.ToString() };
+        }
+
+        /// <summary>
+        /// Returns null if the file can be opened exclusively for read/write (as ClarionCL needs),
+        /// otherwise a message explaining why not. The handle is released immediately.
+        /// </summary>
+        private static string CheckExclusiveAccess(string path)
+        {
+            try
+            {
+                using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                }
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Path.GetFileName(path) + " es de solo lectura o no hay permisos de escritura.";
+            }
+            catch (IOException)
+            {
+                return Path.GetFileName(path) + " está en uso (¿abierto en el IDE?).";
+            }
         }
 
         private bool RunProcess(string exePath, string arguments, string workingDir, int timeoutSeconds, StringBuilder log)
@@ -76,6 +125,12 @@ namespace SelectiveBuild.Services
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.CreateNoWindow = true;
+
+                // Console tools (MSBuild, ClarionCL) write redirected output in the OEM code page
+                // (e.g. 850), not the ANSI one; decode accordingly so "Asegúrese" isn't "Aseg£rese".
+                Encoding oem = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+                psi.StandardOutputEncoding = oem;
+                psi.StandardErrorEncoding = oem;
 
                 using (var proc = new Process())
                 {
