@@ -1,16 +1,58 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace SelectiveBuild.Services
 {
+    /// <summary>Outcome of building one app.</summary>
+    public enum BuildStatus
+    {
+        Ok,
+        Error,
+        /// <summary>Not built on purpose (e.g. the .app is open in the IDE), which is not the same as a failure.</summary>
+        Skipped
+    }
+
+    /// <summary>What a log line says, used to filter the log and to collect the error/warning lists.</summary>
+    public enum LineKind
+    {
+        Info,
+        Header,
+        Warning,
+        Error
+    }
+
     public class BuildResult
     {
         public string AppName { get; set; }
-        public bool Success { get; set; }
+        public BuildStatus Status { get; set; }
         public string Output { get; set; }
+        public List<string> Errors { get; set; }
+        public List<string> Warnings { get; set; }
+        /// <summary>Time spent in ClarionCL generating the source.</summary>
+        public TimeSpan GenerateTime { get; set; }
+        /// <summary>Time spent in MSBuild compiling and linking.</summary>
+        public TimeSpan CompileTime { get; set; }
+
+        public BuildResult()
+        {
+            Errors = new List<string>();
+            Warnings = new List<string>();
+        }
+
+        public TimeSpan TotalTime
+        {
+            get { return GenerateTime + CompileTime; }
+        }
+
+        public bool Success
+        {
+            get { return Status == BuildStatus.Ok; }
+        }
     }
 
     /// <summary>
@@ -23,19 +65,51 @@ namespace SelectiveBuild.Services
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
                 "Microsoft.NET", "Framework", "v4.0.30319", "MSBuild.exe");
 
+        // Matches how the Clarion toolchain reports problems, e.g.
+        //   "Sdgidata.exp(1,1): error : $ACCESS:... is unresolved for export"
+        //   "SDGI1.cwproj(614,3): error MSB4019: ..."
+        //   " warning CLCE004: Command Line Switch ... does not exist!"
+        private static readonly Regex ErrorRegex = new Regex(
+            @"(^|[\s)])(fatal\s+)?error\s*[A-Za-z]*\d*\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Regex WarningRegex = new Regex(
+            @"(^|[\s)])warning\s*[A-Za-z]*\d*\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public event Action<string> OutputReceived;
+
+        /// <summary>
+        /// Classifies one log line. Public so the UI can filter the log by detail level using
+        /// exactly the same rules that built the error and warning lists.
+        /// </summary>
+        public static LineKind Classify(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return LineKind.Info;
+
+            if (line.StartsWith("=== ", StringComparison.Ordinal)) return LineKind.Header;
+
+            // Messages written by SelectiveBuild itself.
+            if (line.StartsWith("ERROR", StringComparison.Ordinal)) return LineKind.Error;
+            if (line.StartsWith("ADVERTENCIA", StringComparison.Ordinal)) return LineKind.Warning;
+
+            if (ErrorRegex.IsMatch(line)) return LineKind.Error;
+            if (WarningRegex.IsMatch(line)) return LineKind.Warning;
+
+            return LineKind.Info;
+        }
 
         public BuildResult Build(AppInfo app, string clarionCLPath, string configuration, string platform, int timeoutSeconds)
         {
             var sb = new StringBuilder();
-            bool ok = true;
+            var result = new BuildResult { AppName = app.Name, Status = BuildStatus.Error };
 
-            Log(sb, "=== " + app.Name + " ===");
+            Log(result, sb, "=== " + app.Name + " ===");
 
             if (!File.Exists(app.AppPath))
             {
-                Log(sb, "ERROR: no se encontró el archivo .app: " + app.AppPath);
-                return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
+                Log(result, sb, "ERROR: no se encontró el archivo .app: " + app.AppPath);
+                return Finish(result, sb);
             }
 
             // ClarionCL /ag needs exclusive access to the .app; if it's open (typically in the IDE), skip it
@@ -43,23 +117,27 @@ namespace SelectiveBuild.Services
             string lockError = CheckExclusiveAccess(app.AppPath);
             if (lockError != null)
             {
-                Log(sb, "ERROR: " + lockError + " Se omite " + app.Name + ".");
-                return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
+                Log(result, sb, "ERROR: " + lockError + " Se omite " + app.Name + ".");
+                result.Status = BuildStatus.Skipped;
+                return Finish(result, sb);
             }
 
             // Step 1: generate source from the .app
-            ok = RunProcess(clarionCLPath, "/ag \"" + app.AppPath + "\" /au", Path.GetDirectoryName(app.AppPath), timeoutSeconds, sb);
+            var watch = Stopwatch.StartNew();
+            bool ok = RunProcess(clarionCLPath, "/ag \"" + app.AppPath + "\" /au", Path.GetDirectoryName(app.AppPath), timeoutSeconds, result, sb);
+            watch.Stop();
+            result.GenerateTime = watch.Elapsed;
             if (!ok)
             {
-                Log(sb, "ERROR generando fuente para " + app.Name);
-                return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
+                Log(result, sb, "ERROR generando fuente para " + app.Name);
+                return Finish(result, sb);
             }
 
             // Step 2: compile/link via MSBuild
             if (!File.Exists(app.CwprojPath))
             {
-                Log(sb, "ERROR: no se encontró el proyecto: " + app.CwprojPath);
-                return new BuildResult { AppName = app.Name, Success = false, Output = sb.ToString() };
+                Log(result, sb, "ERROR: no se encontró el proyecto: " + app.CwprojPath);
+                return Finish(result, sb);
             }
 
             // NoDependency=true: build only this project, not its <ProjectReference>s. The IDE passes the
@@ -77,11 +155,22 @@ namespace SelectiveBuild.Services
             }
             else
             {
-                Log(sb, "ADVERTENCIA: no se encontró SoftVelocity.Build.Clarion.targets en " + clarionBinPath);
+                Log(result, sb, "ADVERTENCIA: no se encontró SoftVelocity.Build.Clarion.targets en " + clarionBinPath);
             }
-            ok = RunProcess(MsBuildPath, msbuildArgs, Path.GetDirectoryName(app.CwprojPath), timeoutSeconds, sb);
 
-            return new BuildResult { AppName = app.Name, Success = ok, Output = sb.ToString() };
+            watch = Stopwatch.StartNew();
+            ok = RunProcess(MsBuildPath, msbuildArgs, Path.GetDirectoryName(app.CwprojPath), timeoutSeconds, result, sb);
+            watch.Stop();
+            result.CompileTime = watch.Elapsed;
+
+            if (ok) result.Status = BuildStatus.Ok;
+            return Finish(result, sb);
+        }
+
+        private static BuildResult Finish(BuildResult result, StringBuilder sb)
+        {
+            result.Output = sb.ToString();
+            return result;
         }
 
         /// <summary>
@@ -107,11 +196,11 @@ namespace SelectiveBuild.Services
             }
         }
 
-        private bool RunProcess(string exePath, string arguments, string workingDir, int timeoutSeconds, StringBuilder log)
+        private bool RunProcess(string exePath, string arguments, string workingDir, int timeoutSeconds, BuildResult result, StringBuilder log)
         {
             if (!File.Exists(exePath))
             {
-                Log(log, "ERROR: no se encontró el ejecutable: " + exePath);
+                Log(result, log, "ERROR: no se encontró el ejecutable: " + exePath);
                 return false;
             }
 
@@ -135,8 +224,8 @@ namespace SelectiveBuild.Services
                 using (var proc = new Process())
                 {
                     proc.StartInfo = psi;
-                    proc.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log(log, e.Data); };
-                    proc.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log(log, e.Data); };
+                    proc.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log(result, log, e.Data); };
+                    proc.ErrorDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) Log(result, log, e.Data); };
 
                     proc.Start();
                     proc.BeginOutputReadLine();
@@ -146,7 +235,7 @@ namespace SelectiveBuild.Services
                     if (!exited)
                     {
                         try { proc.Kill(); } catch { }
-                        Log(log, "ERROR: tiempo de espera agotado (" + timeoutSeconds + "s)");
+                        Log(result, log, "ERROR: tiempo de espera agotado (" + timeoutSeconds + "s)");
                         return false;
                     }
 
@@ -155,14 +244,19 @@ namespace SelectiveBuild.Services
             }
             catch (Exception ex)
             {
-                Log(log, "ERROR ejecutando " + Path.GetFileName(exePath) + ": " + ex.Message);
+                Log(result, log, "ERROR ejecutando " + Path.GetFileName(exePath) + ": " + ex.Message);
                 return false;
             }
         }
 
-        private void Log(StringBuilder sb, string line)
+        private void Log(BuildResult result, StringBuilder sb, string line)
         {
             sb.AppendLine(line);
+
+            LineKind kind = Classify(line);
+            if (kind == LineKind.Error) result.Errors.Add(line.Trim());
+            else if (kind == LineKind.Warning) result.Warnings.Add(line.Trim());
+
             if (OutputReceived != null) OutputReceived(line);
         }
     }

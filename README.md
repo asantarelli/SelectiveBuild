@@ -14,8 +14,10 @@ Addin para el IDE de **Clarion 11** que compila solo los apps que elijas de una 
   1. `ClarionCL.exe /ag "<app>.app" /au` — genera el código fuente
   2. `MSBuild.exe <app>.cwproj` — compila y linkea
 - **Orden de compilación igual al del IDE**: el que muestra *Project Dependency Editor → "Projects build in this order"*
-- Log en tiempo real de la salida de ClarionCL y MSBuild
-- Recuerda la última selección de cada solución
+- Log en tiempo real de la salida de ClarionCL y MSBuild, con **nivel de detalle** configurable (Mínimo / Solo errores / Todo)
+- **Resumen** al terminar: una fila por app con estado (OK / Error / Omitido), cantidad de errores y advertencias, y duración; los errores del app seleccionado se ven en detalle
+- Botones **Copiar errores** y **Copiar log completo**, para pegar el resultado en un mail o en un issue
+- Recuerda la última selección de cada solución y el nivel de detalle elegido
 
 ---
 
@@ -42,6 +44,16 @@ Para abrir el pad: menú **Tools → Selective Build**.
 2. En el pad, tildá los apps a compilar y elegí la configuración.
 3. **Cerrá en el IDE los apps que vayas a compilar.** ClarionCL necesita acceso exclusivo al `.app`; si alguno está abierto, se omite con un aviso en el log y se sigue con el resto.
 4. Presioná **Compilar seleccionados**.
+
+Al terminar se abre la pestaña **Resumen**, con una fila por app y el primer app que falló ya seleccionado. En rojo los que fallaron, en naranja los omitidos, en amarillo los que compilaron con advertencias y en verde los que quedaron limpios.
+
+El selector **Detalle** controla solo cuánto se escribe en el log; el Resumen y los botones de copiar siempre tienen la información completa:
+
+| Nivel | Log |
+|---|---|
+| Mínimo | encabezado de cada app y su resultado |
+| Solo errores | encabezados, errores y advertencias |
+| Todo | toda la salida de ClarionCL y MSBuild |
 
 ---
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] - 2026-10-03
+
+### Agregado
+- Pestaña **Resumen** con una fila por app: estado (OK / Error / Omitido), cantidad de errores y advertencias, y duración. Las filas se colorean según el estado y al terminar queda seleccionado el primer app que falló.
+- Detalle de errores y advertencias del app seleccionado.
+- Botones **Copiar errores** y **Copiar log completo**, que copian un reporte con la solución, la configuración, el orden de compilación y el estado de cada app.
+- Selector **Detalle** (Mínimo / Solo errores / Todo) para elegir cuánto se escribe en el log. La elección se recuerda entre sesiones.
+- La barra de estado muestra el avance (`Compilando... 2/5`) y, al final, los totales con la duración.
+
 ## [1.1.3] - 2026-09-19
 
 Primera versión pública.
