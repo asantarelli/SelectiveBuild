@@ -32,7 +32,24 @@ Addin para el IDE de **Clarion 11** que compila solo los apps que elijas de una 
 
 **Con Addin Finder:** buscá *SelectiveBuild* e instalalo.
 
-**Manual:** descargá `SelectiveBuild.dll` y `SelectiveBuild.addin` del [último release](https://github.com/asantarelli/SelectiveBuild/releases/latest) y copialos a una carpeta propia dentro de `<Clarion>\accessory\addins\SelectiveBuild\`. Reiniciá el IDE.
+**Con el instalador:** ejecutá `SelectiveBuild-Setup-<versión>.exe`, que está en [`releases/`](releases/) y en el [último release](https://github.com/asantarelli/SelectiveBuild/releases/latest). Con **el IDE de Clarion cerrado**:
+
+1. Detecta las instalaciones de Clarion de la máquina (o elegís la carpeta con **Examinar...**).
+2. Verifica lo que el addin necesita: las DLL del IDE (`ICSharpCode.*`), `ClarionCL.exe` y el MSBuild de .NET Framework 4. SelectiveBuild no trae librerías de terceros: usa las del propio IDE.
+3. Copia `SelectiveBuild.dll` y `SelectiveBuild.addin` a `<Clarion>\accessory\addins\SelectiveBuild\`. Si ya hay una copia manual en `<Clarion>\bin\Addins`, la actualiza ahí mismo para no duplicar el addin.
+4. Se registra en *Aplicaciones instaladas* de Windows, para desinstalarlo desde ahí.
+
+No pide permisos de administrador salvo que la carpeta de Clarion los requiera. Para instalar sin interfaz (por ejemplo desde un script):
+
+```
+SelectiveBuild-Setup-1.2.0.exe /S /D=D:\Clarion11
+```
+
+Códigos de salida: `0` ok, `2` faltan requisitos, `3` el IDE está abierto, `4` no se encontró Clarion, `5` hacen falta permisos de administrador. `/LOG=<archivo>` guarda el detalle y `/UNINSTALL` desinstala.
+
+**Manual:** descargá `SelectiveBuild-<versión>.zip` (o `SelectiveBuild.dll` y `SelectiveBuild.addin`) y copialos a una carpeta propia dentro de `<Clarion>\accessory\addins\SelectiveBuild\`. Reiniciá el IDE.
+
+Cada release trae un `SHA256SUMS.txt` para verificar la descarga.
 
 Para abrir el pad: menú **Tools → Selective Build**.
 
@@ -86,6 +103,14 @@ Cada app se compila **solo** (`NoDependency=true`, igual que "compilar solo el p
 ```
 
 El proyecto referencia `ICSharpCode.Core.dll` y `ICSharpCode.SharpDevelop.dll` desde `D:\Clarion11\bin`; ajustá los `HintPath` de `SelectiveBuild.csproj` a tu instalación. La versión se define solo en `Properties/AssemblyInfo.cs`: el build la copia al `SelectiveBuild.addin` de `bin\Release`, que es el que hay que distribuir.
+
+### Generar el instalador
+
+```
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
+
+Compila el addin y el instalador (`installer\Setup.cs`, `installer\SetupForm.cs`) con el compilador de .NET 4, igual que el addin: **sin C# 6+**. Deja en `releases\v<versión>\` el instalador, el `.zip` para instalación manual y `SHA256SUMS.txt`. El instalador lleva embebidos la DLL y el `.addin`, y no necesita ninguna herramienta externa.
 
 ---
 

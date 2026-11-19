@@ -8,6 +8,8 @@
 - Botones **Copiar errores** y **Copiar log completo**, que copian un reporte con la solución, la configuración, el orden de compilación y el estado de cada app.
 - Selector **Detalle** (Mínimo / Solo errores / Todo) para elegir cuánto se escribe en el log. La elección se recuerda entre sesiones.
 - La barra de estado muestra el avance (`Compilando... 2/5`) y, al final, los totales con la duración.
+- **Instalador** (`SelectiveBuild-Setup-1.2.0.exe`) en la carpeta `releases/`: detecta Clarion, verifica las dependencias (DLL del IDE, `ClarionCL.exe`, MSBuild de .NET 4), instala el addin, actualiza una copia manual existente en `bin\Addins` sin duplicarla, se registra en *Aplicaciones instaladas* y permite desinstalar. Admite `/S`, `/D=`, `/LOG=` y `/UNINSTALL`. También hay un `.zip` para instalación manual y `SHA256SUMS.txt`.
+- `installer\build.ps1` para regenerar el instalador.
 
 ## [1.1.3] - 2026-09-19
 

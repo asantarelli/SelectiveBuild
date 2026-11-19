@@ -1,0 +1,2 @@
+f0c342ffc69230af5b4caf282af5394aab810ad228bc1faecaeebfa688d55b2c  SelectiveBuild-Setup-1.2.0.exe
+b626a3d190f92a7e134e2d794866853497d72ab93a0758336951d4554be24313  SelectiveBuild-1.2.0.zip
