@@ -59,11 +59,13 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="SelectiveBuild.addin" />
+    <None Include="SelectiveBuild.addin.template" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- Writes SelectiveBuild.addin to the output with {VERSION} replaced by the built assembly's
-       version (Major.Minor.Build), so AssemblyInfo.cs is the only place the version is set. -->
+       version (Major.Minor.Build), so AssemblyInfo.cs is the only place the version is set.
+       The source file is SelectiveBuild.addin.template on purpose: with a .addin extension the IDE
+       would try to load the raw {VERSION} manifest from a source checkout and fail. -->
   <Target Name="StampAddinVersion" AfterTargets="Build">
     <GetAssemblyIdentity AssemblyFiles="$(TargetPath)">
       <Output TaskParameter="Assemblies" ItemName="_BuiltAssembly" />
@@ -71,7 +73,7 @@
     <PropertyGroup>
       <_FullVersion>%(_BuiltAssembly.Version)</_FullVersion>
       <_AddinVersion>$([System.Version]::Parse($(_FullVersion)).ToString(3))</_AddinVersion>
-      <_AddinText>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\SelectiveBuild.addin').Replace('{VERSION}', '$(_AddinVersion)'))</_AddinText>
+      <_AddinText>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\SelectiveBuild.addin.template').Replace('{VERSION}', '$(_AddinVersion)'))</_AddinText>
     </PropertyGroup>
     <WriteLinesToFile File="$(OutDir)SelectiveBuild.addin" Lines="$(_AddinText)" Overwrite="true" Encoding="UTF-8" />
   </Target>

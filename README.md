@@ -51,6 +51,8 @@ Códigos de salida: `0` ok, `2` faltan requisitos, `3` el IDE está abierto, `4`
 
 Cada release trae un `SHA256SUMS.txt` para verificar la descarga.
 
+> **No uses "Download ZIP" de la página principal del repo** (`SelectiveBuild-master.zip`): es el código fuente, sin la DLL compilada, y copiarlo a `accessory\addins` hace que el IDE muestre un error al cargar el addin. Usá el instalador o el `.zip` de los [releases](https://github.com/asantarelli/SelectiveBuild/releases/latest).
+
 Para abrir el pad: menú **Tools → Selective Build**.
 
 ---
